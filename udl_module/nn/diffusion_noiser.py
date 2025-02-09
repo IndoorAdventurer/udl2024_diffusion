@@ -27,8 +27,8 @@ class DiffusionNoiser(nn.Module):
         """
         Args:
             steps: number of noising steps to use
-            beta_start: todo
-            beta_end: todo
+            beta_start: the initial value for beta (linear interpolation)
+            beta_end: the final value of beta (linear interpolation)
         """
         super().__init__()
 
@@ -50,7 +50,7 @@ class DiffusionNoiser(nn.Module):
             noise: the gaussian noise to add N(0,1) [(B x) C x H x W].
             t: integer time step (single integer or shape [B,])
         """
-        alpha_bar = self.alpha_bars[t]
+        alpha_bar = self.reshape(self.alpha_bars[t], img)
         return torch.sqrt(alpha_bar) * img + torch.sqrt(1 - alpha_bar) * noise
 
     def noise_from_closed_form_noise(self, img, noised_img, t):
@@ -62,7 +62,7 @@ class DiffusionNoiser(nn.Module):
             noised_img: a noised version of the image.
             t: the timestep used to get from img to noised_img.
         """
-        alpha_bar = self.alpha_bars[t]
+        alpha_bar = self.reshape(self.alpha_bars[t], img)
         return (noised_img - torch.sqrt(alpha_bar) * img) / torch.sqrt(1 - alpha_bar)
     
     def img_from_closed_form_noise(self, noised_img, noise, t):
@@ -74,7 +74,7 @@ class DiffusionNoiser(nn.Module):
             noise: the noise that was added to get noised_img.
             t: the timestep used to get from imgage to noised_img using noise.
         """
-        alpha_bar = self.alpha_bars[t]
+        alpha_bar = self.reshape(self.alpha_bars[t], noised_img)
         return (noised_img - torch.sqrt(1 - alpha_bar) * noise ) / torch.sqrt(alpha_bar)
     
     def forward_noise_step(self, img_prev, noise, t):
@@ -85,7 +85,7 @@ class DiffusionNoiser(nn.Module):
             img_prev: image corresponding to step t.
             noise: the noise to add to get to step t+1.
             t: current time step."""
-        beta = self.betas[t]
+        beta = self.reshape(self.betas[t], img_prev)
         return torch.sqrt(1 - beta) * img_prev + torch.sqrt(beta) * noise
     
     def denoising_step(self, img_next, noise_next, t, new_noise):
@@ -98,8 +98,8 @@ class DiffusionNoiser(nn.Module):
             t: current time step.
             new_noise: new pure gausssian noise N(0, 1) to add.
         """
-        beta = self.betas[t]
-        alpha_bar = self.alpha_bars[t]
+        beta = self.reshape(self.betas[t], img_next)
+        alpha_bar = self.reshape(self.alpha_bars[t], img_next)
 
         mean_t = (
             img_next - noise_next * beta / torch.sqrt(1 - alpha_bar)
@@ -107,3 +107,9 @@ class DiffusionNoiser(nn.Module):
         img_t = mean_t + beta * new_noise
 
         return img_t
+    
+    def reshape(self, scalars: torch.Tensor, tensor: torch.Tensor):
+        """Adds dimensions to scalars so they broadcast properly."""
+        b = len(scalars)
+        extra_dims = len(tensor.shape) - 1
+        return scalars.view(b, *([1] * extra_dims))
