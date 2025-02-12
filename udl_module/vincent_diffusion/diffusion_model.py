@@ -10,7 +10,7 @@ class DiffusionModel(L.LightningModule):
 
     def __init__(   self,
                     model: nn.Module,
-                    optimizer_cls: torch.optim.Optimizer = torch.optim.Adam,
+                    optimizer_cls: type[torch.optim.Optimizer] = torch.optim.Adam,
                     optimizer_args: dict = dict(),
                     steps: int = 1000,
                     beta_start: float = 1e-4,
@@ -48,6 +48,16 @@ class DiffusionModel(L.LightningModule):
         self.log("train/mse", loss, prog_bar=True)
         return loss
     
+    def validation_step(self, batch, batch_idx):
+        noise = torch.randn_like(batch)
+        ts = torch.randint(0, len(self.noiser.betas), (len(batch),), device=batch.device)
+        noised_img = self.noiser.closed_form_noise(batch, noise, ts)
+
+        noise_hat = self.model(noised_img, ts)
+
+        loss = nn.functional.mse_loss(noise_hat, noise)
+        self.log("val/mse", loss)
+
     def configure_optimizers(self):
         return self.optimizer_cls(self.parameters(), *self.optimizer_args)
     

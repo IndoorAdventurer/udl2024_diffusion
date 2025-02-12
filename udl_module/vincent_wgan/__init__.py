@@ -1,0 +1,1 @@
+from .wgan_funcs import WGANWithGradientPenaltyFuncs
