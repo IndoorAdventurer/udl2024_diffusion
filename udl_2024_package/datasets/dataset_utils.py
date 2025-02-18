@@ -25,11 +25,12 @@ def remove_dataset_labels(dataset: Dataset):
     """
     return NoLabelsWrapper(dataset)
 
-def default_img_transforms(num_channels: int = 3):
+def default_img_transforms(num_channels: int = 3, extra_transforms = []):
     """First calls ToTensor (should scale to range from 0 to 1), then re-scales
     to range between -1 and 1.
     """
     return transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize(mean=[.5] * num_channels, std=[.5] * num_channels),
+        *extra_transforms
     ])

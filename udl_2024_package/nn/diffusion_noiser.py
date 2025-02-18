@@ -88,9 +88,10 @@ class DiffusionNoiser(nn.Module):
         beta = self.reshape(self.betas[t], img_prev)
         return torch.sqrt(1 - beta) * img_prev + torch.sqrt(beta) * noise
     
-    def denoising_step(self, img_next, noise_next, t, new_noise):
+    def denoising_step(self, img_t, noise_t, t, new_noise):
         """The inverse process of the forward_noise_step: predicts image at
-        step t from image at step t+1.
+        step t from image at step t+1. Using formulas 6 and 7 from the original
+        paper https://arxiv.org/pdf/2006.11239
         
         Args:
             img_next: image from step t+1.
@@ -98,15 +99,22 @@ class DiffusionNoiser(nn.Module):
             t: current time step.
             new_noise: new pure gausssian noise N(0, 1) to add.
         """
-        beta = self.reshape(self.betas[t], img_next)
-        alpha_bar = self.reshape(self.alpha_bars[t], img_next)
+        prev_t = torch.clamp(t - 1, 0)
+        
+        beta = self.reshape(self.betas[t], img_t)
+        alpha_bar = self.reshape(self.alpha_bars[t], img_t)
+        alpha_bar_prev = self.reshape(self.alpha_bars[prev_t], img_t)
 
-        mean_t = (
-            img_next - noise_next * beta / torch.sqrt(1 - alpha_bar)
-        ) / torch.sqrt(1 - beta)
-        img_t = mean_t + beta * new_noise
+        img_0 = self.img_from_closed_form_noise(img_t, noise_t, t)
+        img_0 = img_0.clamp(-10, 10) # This does not seem to be needed.
+        
+        img_0_scalar = torch.sqrt(alpha_bar_prev) * beta / (1 - alpha_bar)
+        img_t_scalar = torch.sqrt(1 - beta) * (1 - alpha_bar_prev) / (1 - alpha_bar)
+        mu_t = img_0_scalar * img_0 + img_t_scalar * img_t
 
-        return img_t
+        variance_t = beta * (1 - alpha_bar_prev) / (1 - alpha_bar)
+        
+        return mu_t + torch.sqrt(variance_t) * new_noise
     
     def reshape(self, scalars: torch.Tensor, tensor: torch.Tensor):
         """Adds dimensions to scalars so they broadcast properly."""

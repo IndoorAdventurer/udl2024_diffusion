@@ -171,3 +171,7 @@ cython_debug/
 .pypirc
 
 notebooks/datasets/
+
+*.ckpt
+
+wandb/

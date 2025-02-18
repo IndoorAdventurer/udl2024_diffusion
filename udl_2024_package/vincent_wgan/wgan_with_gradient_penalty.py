@@ -50,7 +50,6 @@ class WGANWithGradientPenalty(L.LightningModule):
 
         # Creating fake images
         with torch.no_grad():
-            # noise = torch.randn((batch.shape[0], 100, 1, 1), device=self.device)
             fake_imgs = self.gen_func(self.gen, batch)
         
         loss_critic = self.wgan_funcs.critic_loss(self.cri, batch, fake_imgs)
@@ -80,6 +79,21 @@ class WGANWithGradientPenalty(L.LightningModule):
             self.log("train/loss_generator", loss_gen, prog_bar=True)
 
             self.untoggle_optimizer(opt_g)
+        
+    def validation_step(self, batch, batch_idx):
+
+        # Creating fake images
+        fake_imgs = self.gen_func(self.gen, batch)
+        
+        loss_critic = self.wgan_funcs.critic_loss(self.cri, batch, fake_imgs, False)
+        loss_gen = self.wgan_funcs.generator_loss(self.cri, fake_imgs)
+
+        # Weight update:
+        self.log("val/loss_critic", loss_critic, prog_bar=True)
+        
+        # This second one is a bit silly: won't be different under validation
+        # conditions I think (unless self.gen.eval() has impact).
+        self.log("val/loss_generator", loss_gen, prog_bar=True)
     
     def configure_optimizers(self):
         opt_g = self.optimizer_cls(self.gen.parameters(), **self.optimizer_args)

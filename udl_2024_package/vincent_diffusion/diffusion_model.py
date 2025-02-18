@@ -11,7 +11,7 @@ class DiffusionModel(L.LightningModule):
     def __init__(   self,
                     model: nn.Module,
                     optimizer_cls: type[torch.optim.Optimizer] = torch.optim.Adam,
-                    optimizer_args: dict = dict(),
+                    optimizer_args: dict = { "lr": 2e-4 },
                     steps: int = 1000,
                     beta_start: float = 1e-4,
                     beta_end: float = 0.02
@@ -59,7 +59,7 @@ class DiffusionModel(L.LightningModule):
         self.log("val/mse", loss)
 
     def configure_optimizers(self):
-        return self.optimizer_cls(self.parameters(), *self.optimizer_args)
+        return self.optimizer_cls(self.parameters(), **self.optimizer_args)
     
     @torch.inference_mode()
     def sample_img(self, shape: tuple[int]):

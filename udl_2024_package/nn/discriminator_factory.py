@@ -1,7 +1,7 @@
 from torchvision.models import resnet18, resnet34
 from torch import nn
 
-def discriminator_factory(in_channels: int, model_cls = resnet34):
+def discriminator_factory(in_channels: int, model_cls = resnet34) -> nn.Module:
     """Returns a resnet-based discriminator model to train the GAN.
     
     Args:

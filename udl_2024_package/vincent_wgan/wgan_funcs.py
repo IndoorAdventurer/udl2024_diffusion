@@ -22,13 +22,16 @@ class WGANWithGradientPenaltyFuncs:
             return False
         return (batch_idx % self.critic_iterations) == 0
     
-    def critic_loss(self, critic_model, batch, fake_imgs):
-        """Returns loss for the critic model."""
+    def critic_loss(self, critic_model, batch, fake_imgs, gp: bool = True):
+        """Returns loss for the critic model. (gp: if False, no gradient penalty)"""
         fake_imgs = fake_imgs.detach() # just to be sure :-p
 
         critic_real = critic_model(batch)
         critic_fake = critic_model(fake_imgs)
-        grad_pen = self.compute_gradient_penalty(critic_model, batch, fake_imgs)
+        grad_pen = (
+            self.compute_gradient_penalty(critic_model, batch, fake_imgs) if gp
+            else 0.0
+        )
 
         # Calculating the Wasserstein loss:
         return (
