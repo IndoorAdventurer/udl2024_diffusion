@@ -15,7 +15,8 @@ class WGANWithGradientPenalty(L.LightningModule):
             gp_weight: float = 10,
             critic_iterations: int = 5,
             optimizer_cls: type[torch.optim.Optimizer] = torch.optim.Adam,
-            optimizer_args: dict = {"lr": 1e-4, "betas": (0.5, 0.99)}
+            optimizer_args: dict = {"lr": 1e-4, "betas": (0.5, 0.99)},
+            lr_scaling_factor: float = 1.0
     ):
         """
         Args:
@@ -29,6 +30,8 @@ class WGANWithGradientPenalty(L.LightningModule):
             optimizer_cls: e.g. Adam
             optimizer_args: dict of args to give to optimizer (excluding
                 model params, of course)
+            lr_scaling_factor: scales the learning rate of the generator by this
+                amount, compared to the discriminator.
         """
         super().__init__()
         self.gen = generator
@@ -37,6 +40,7 @@ class WGANWithGradientPenalty(L.LightningModule):
         self.wgan_funcs = WGANWithGradientPenaltyFuncs(gp_weight, critic_iterations)
         self.optimizer_cls = optimizer_cls
         self.optimizer_args = optimizer_args
+        self.lr_scaling_factor = lr_scaling_factor
 
         self.automatic_optimization = False
     
@@ -52,13 +56,16 @@ class WGANWithGradientPenalty(L.LightningModule):
         with torch.no_grad():
             fake_imgs = self.gen_func(self.gen, batch)
         
-        loss_critic = self.wgan_funcs.critic_loss(self.cri, batch, fake_imgs)
+        loss_critic, w_dist, grad_pen = self.wgan_funcs.critic_loss(
+            self.cri, batch, fake_imgs)
 
         # Weight update:
         opt_c.zero_grad()
         self.manual_backward(loss_critic)
         opt_c.step()
         self.log("train/loss_critic", loss_critic, prog_bar=True)
+        self.log("train/wasserstein_distance", w_dist)
+        self.log("train/gradient_penalty", grad_pen)
 
         self.untoggle_optimizer(opt_c) # not really sure if needed but well..
         
@@ -85,17 +92,23 @@ class WGANWithGradientPenalty(L.LightningModule):
         # Creating fake images
         fake_imgs = self.gen_func(self.gen, batch)
         
-        loss_critic = self.wgan_funcs.critic_loss(self.cri, batch, fake_imgs, False)
+        loss_critic, w_dist, grad_pen = self.wgan_funcs.critic_loss(
+            self.cri, batch, fake_imgs, False)
         loss_gen = self.wgan_funcs.generator_loss(self.cri, fake_imgs)
 
-        # Weight update:
+        # Logging:
         self.log("val/loss_critic", loss_critic, prog_bar=True)
+        self.log("val/wasserstein_distance", w_dist)
+        self.log("val/gradient_penalty", grad_pen)
         
         # This second one is a bit silly: won't be different under validation
         # conditions I think (unless self.gen.eval() has impact).
         self.log("val/loss_generator", loss_gen, prog_bar=True)
     
     def configure_optimizers(self):
-        opt_g = self.optimizer_cls(self.gen.parameters(), **self.optimizer_args)
+        args_g = self.optimizer_args.copy()
+        args_g["lr"] *= self.lr_scaling_factor
+
+        opt_g = self.optimizer_cls(self.gen.parameters(), **args_g)
         opt_c = self.optimizer_cls(self.cri.parameters(), **self.optimizer_args)
         return opt_g, opt_c

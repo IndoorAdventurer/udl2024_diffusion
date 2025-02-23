@@ -28,16 +28,18 @@ class WGANWithGradientPenaltyFuncs:
 
         critic_real = critic_model(batch)
         critic_fake = critic_model(fake_imgs)
+        w_distance = - torch.mean(critic_real) + torch.mean(critic_fake)
         grad_pen = (
             self.compute_gradient_penalty(critic_model, batch, fake_imgs) if gp
             else 0.0
-        )
+        ) * self.gp_weight
+
 
         # Calculating the Wasserstein loss:
         return (
-            - torch.mean(critic_real)
-            + torch.mean(critic_fake)
-            + self.gp_weight * grad_pen
+            w_distance + grad_pen,
+            w_distance,
+            grad_pen
         )
     
     def generator_loss(self, critic_model, fake_imgs):

@@ -1,3 +1,4 @@
 from .diffusion_noiser import DiffusionNoiser
 from .unet_factory import unet_factory
 from .discriminator_factory import discriminator_factory
+from .gan_discriminator import SimpleDiscriminator

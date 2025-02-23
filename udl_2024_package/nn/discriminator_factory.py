@@ -1,3 +1,6 @@
+# Warning: this one should not be used. Any out of the box resnet model is
+# way overpowered for the datasets we ended up with.
+
 from torchvision.models import resnet18, resnet34
 from torch import nn
 
