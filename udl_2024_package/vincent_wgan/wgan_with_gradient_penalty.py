@@ -15,8 +15,8 @@ class WGANWithGradientPenalty(L.LightningModule):
             gp_weight: float = 10,
             critic_iterations: int = 5,
             optimizer_cls: type[torch.optim.Optimizer] = torch.optim.Adam,
-            optimizer_args: dict = {"lr": 1e-4, "betas": (0.5, 0.99)},
-            lr_scaling_factor: float = 1.0
+            gen_optimizer_args: dict = {"lr": 1e-4, "betas": (0.5, 0.99)},
+            cri_optimizer_args: dict = {"lr": 1e-4, "betas": (0.5, 0.99)},
     ):
         """
         Args:
@@ -28,10 +28,10 @@ class WGANWithGradientPenalty(L.LightningModule):
             gp_weight: gradient penalty weight. See `WGANWithGradientPenaltyFuncs`
             critic_iterations: See `WGANWithGradientPenaltyFuncs`
             optimizer_cls: e.g. Adam
-            optimizer_args: dict of args to give to optimizer (excluding
-                model params, of course)
-            lr_scaling_factor: scales the learning rate of the generator by this
-                amount, compared to the discriminator.
+            gen_optimizer_args: dict of args to give to generator's optimizer
+                (excluding model params, of course)
+            cri_optimizer_args: dict of args to give to critic's optimizer
+                (excluding model params, of course)
         """
         super().__init__()
         self.gen = generator
@@ -39,8 +39,8 @@ class WGANWithGradientPenalty(L.LightningModule):
         self.gen_func = generator_func
         self.wgan_funcs = WGANWithGradientPenaltyFuncs(gp_weight, critic_iterations)
         self.optimizer_cls = optimizer_cls
-        self.optimizer_args = optimizer_args
-        self.lr_scaling_factor = lr_scaling_factor
+        self.gen_optimizer_args = gen_optimizer_args
+        self.cri_optimizer_args = cri_optimizer_args
 
         self.automatic_optimization = False
     
@@ -106,9 +106,6 @@ class WGANWithGradientPenalty(L.LightningModule):
         self.log("val/loss_generator", loss_gen, prog_bar=True)
     
     def configure_optimizers(self):
-        args_g = self.optimizer_args.copy()
-        args_g["lr"] *= self.lr_scaling_factor
-
-        opt_g = self.optimizer_cls(self.gen.parameters(), **args_g)
-        opt_c = self.optimizer_cls(self.cri.parameters(), **self.optimizer_args)
+        opt_g = self.optimizer_cls(self.gen.parameters(), **self.gen_optimizer_args)
+        opt_c = self.optimizer_cls(self.cri.parameters(), **self.cri_optimizer_args)
         return opt_g, opt_c
