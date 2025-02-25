@@ -1,4 +1,6 @@
 
+import matplotlib
+matplotlib.use('Agg')  # Use a non-GUI backend
 import matplotlib.pyplot as plt
 import torch
 import torchvision
@@ -7,6 +9,7 @@ from tqdm import tqdm
 from torch import nn
 from PIL import Image
 from torch.nn import functional as F
+from pytorch_fid import fid_score
 
 class Diffusion():
     def __init__(self, noise_steps=1000, beta_start=1e-4, beta_end=0.02, img_size=64, device='cuda'):
@@ -149,6 +152,66 @@ class Up(nn.Module):
         emb = emb[:, :, None, None].repeat(1, 1, x.shape[-2], x.shape[-1])
         return x + emb
 
+class BigUnet(nn.Module):
+    def __init__(self, c_in=3, c_out=3, time_dim=256, device="cuda"):
+        super().__init__()
+        self.device = device
+        self.time_dim = time_dim
+        self.inc = DoubleConv(c_in, 64)
+        self.down1 = Down(64, 128)
+        self.sa1 = SelfAttention(128, 32)
+        self.down2 = Down(128, 256)
+        self.sa2 = SelfAttention(256, 16)
+        self.down3 = Down(256, 256)
+        self.sa3 = SelfAttention(256, 8)
+
+        self.bot1 = DoubleConv(256, 512)
+        self.bot2 = DoubleConv(512, 512)
+        self.bot3 = DoubleConv(512, 256)
+
+        self.up1 = Up(512, 128)
+        self.sa4 = SelfAttention(128, 16)
+        self.up2 = Up(256, 64)
+        self.sa5 = SelfAttention(64, 32)
+        self.up3 = Up(128, 64)
+        self.sa6 = SelfAttention(64, 64)
+        self.outc = nn.Conv2d(64, c_out, kernel_size=1)
+
+    def pos_encoding(self, t, channels):
+        inv_freq = 1.0 / (
+            10000
+            ** (torch.arange(0, channels, 2, device=self.device).float() / channels)
+        )
+        pos_enc_a = torch.sin(t.repeat(1, channels // 2) * inv_freq)
+        pos_enc_b = torch.cos(t.repeat(1, channels // 2) * inv_freq)
+        pos_enc = torch.cat([pos_enc_a, pos_enc_b], dim=-1)
+        return pos_enc
+
+    def forward(self, x, t):
+        t = t.unsqueeze(-1).type(torch.float)
+        t = self.pos_encoding(t, self.time_dim)
+
+        x1 = self.inc(x)
+        x2 = self.down1(x1, t)
+        x2 = self.sa1(x2)
+        x3 = self.down2(x2, t)
+        x3 = self.sa2(x3)
+        x4 = self.down3(x3, t)
+        x4 = self.sa3(x4)
+
+        x4 = self.bot1(x4)
+        x4 = self.bot2(x4)
+        x4 = self.bot3(x4)
+
+        x = self.up1(x4, x3, t)
+        x = self.sa4(x)
+        x = self.up2(x, x2, t)
+        x = self.sa5(x)
+        x = self.up3(x, x1, t)
+        x = self.sa6(x)
+        output = self.outc(x)
+        return output
+
 class Unet(torch.nn.Module):
     def __init__(self, c_in=3, c_out=3, time_dim=256, device="cuda"):
         super().__init__()
@@ -202,7 +265,7 @@ class Unet(torch.nn.Module):
 
         output = self.outc(x)
         return output
-                        
+    
 def get_data(args):
     transform = torchvision.transforms.Compose([
         torchvision.transforms.Resize(64),
@@ -224,7 +287,7 @@ def save_images(images, path, **kwargs):
 def train(args):
     device = args.device
     dataloader = get_data(args)
-    model = Unet().to(device)
+    model = BigUnet().to(device)
     discriminator = Discriminator().to(device) 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
     mse = torch.nn.MSELoss()
@@ -232,7 +295,9 @@ def train(args):
     discriminator_optimizer = torch.optim.AdamW(discriminator.parameters(), lr=args.lr)
     diffusion = Diffusion(img_size=args.image_size, device=device)
     l = len(dataloader)
-    #print model and parameters size
+    
+    model.load_state_dict(torch.load(f'model_77.pt'))
+
     print(model)
     print(sum(p.numel() for p in model.parameters()))
 
@@ -244,7 +309,7 @@ def train(args):
         pbar = tqdm(dataloader)
 
         #train discriminator every 10 epochs
-        if epoch % 2 == 0:
+        if epoch % 2 == 1:
             print("Training Discriminator")
             discriminator.train()
             for i, (images, _) in enumerate(pbar):
@@ -265,7 +330,7 @@ def train(args):
                 loss_discriminator = bce(real, torch.ones_like(real)) + bce(fake, torch.zeros_like(fake))
                 loss_discriminator.backward()
                 discriminator_optimizer.step()
-                loss_discriminator_plot.append(loss_discriminator.item())
+            loss_discriminator_plot.append(loss_discriminator.item())
         
         else:
             print("Training Generator")
@@ -280,33 +345,44 @@ def train(args):
 
                 #see if the discriminator can tell the difference between the real and fake images
                 #copy predicted noise
-                predicted_noise_det = predicted_noise.detach()
-                discriminator_result = discriminator(x_t - predicted_noise_det)
-
-                diffusion_loss = mse(predicted_noise, noise) + bce(discriminator_result, torch.ones_like(discriminator_result))
+                #predicted_noise_det = predicted_noise.detach()
+                #discriminator_result = discriminator(x_t - predicted_noise_det)
+                
+                loss_gen = mse(predicted_noise, noise)
+                #loss_disc = 0.01 * bce(discriminator_result, torch.ones_like(discriminator_result))
+                
+                diffusion_loss = loss_gen #+ loss_disc
 
                 # Update generator (ensure discriminator does not modify needed tensors)
                 optimizer.zero_grad()
                 diffusion_loss.backward()  # Removed retain_graph=True to avoid unnecessary retention
                 optimizer.step()
 
+            loss_plot.append(diffusion_loss.item())
+
 
         sampled_images = diffusion.sample(model, n=images.shape[0])
-        save_images(sampled_images, f'./sampled_images_{epoch}.png')
-        torch.save(model.state_dict(), f'./model_{epoch}.pt')
+        save_images(sampled_images, f'./sampled_images_{epoch+77}.png')
+        torch.save(model.state_dict(), f'./diff_model_{epoch+77}.pt')
+        torch.save(discriminator.state_dict(), f'./disc_model_{epoch+77}.pt')
 
-        plt.plot(loss_discriminator_plot)
+        #plt.plot(loss_discriminator_plot)
         plt.plot(loss_plot)
-        plt.savefig(f'./loss_discriminator_plot_{epoch}.png')
+        plt.title('Loss diffusion')
+        plt.savefig(f'./loss_plot.png')
         plt.close()
 
-       
+        plt.plot(loss_discriminator_plot)
+        plt.title('Loss discriminator')
+        plt.savefig(f'./loss_discriminator_plot.png')
+        plt.close()
+      
 
 class Discriminator(nn.Module):
     def __init__(self, img_size=64):
         super().__init__()
         self.model = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=4, stride=2, padding=1),  # Reduced filters
+            nn.Conv2d(3, 32, kernel_size=4, stride=2, padding=1), 
             nn.LeakyReLU(0.2),
             nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1),
             nn.LeakyReLU(0.2),
@@ -315,6 +391,15 @@ class Discriminator(nn.Module):
 
     def forward(self, x):
         return torch.sigmoid(self.model(x).squeeze())  # Apply sigmoid
+
+def save_images_individual(images, path, **kwargs):
+    #check if images are in the right format
+
+
+    for i in range(images.shape[0]):
+        im = Image.fromarray(images[i].permute(1, 2, 0).to('cpu').numpy())
+        im.save(f"{path}_{i}.png")
+        
 
 def launch():
     import argparse
@@ -329,8 +414,59 @@ def launch():
     args.lr = 3e-4
     train(args)
 
-def main():
+def load_and_sample():
+    import argparse
+    parser = argparse.ArgumentParser()
+    args = parser.parse_args()
+    args.run_name = "DDPM_Uncondtional"
+    args.epochs = 500
+    args.batch_size = 8
+    args.image_size = 64
+    args.dataset_path = r"./data/cifar-10-batches-py"
+    args.device = "cuda"
+    args.lr = 3e-4
+    diffusion = Diffusion(img_size=args.image_size, device=args.device)
+    model = BigUnet().to(args.device)
+    model.load_state_dict(torch.load(f'Large/model_77.pt'))
+    sampled_images = diffusion.sample(model, n=100)
+    save_images_individual(sampled_images, f'./sampled_large/sample_', format='png')
 
+def save_cifar_as_images(n=100):
+    transform = torchvision.transforms.Compose([
+        torchvision.transforms.Resize(64),
+        torchvision.transforms.ToTensor(),
+
+    ])
+
+    dataset = torchvision.datasets.CIFAR10(root='data', train=True, download=True, transform=transform)
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True, num_workers=4)
+    for i, (images, _) in enumerate(dataloader):
+        #convert images to uint8
+        images = (images*255).type(torch.uint8)
+        save_images_individual(images, f'./real_data/sample_{i}', format='png')
+        if i == 100:
+            break
+
+def calculate_fid(path_to_images, path_to_real_images):
+    import argparse
+    parser = argparse.ArgumentParser()
+    args = parser.parse_args()
+    args.run_name = "DDPM_Uncondtional"
+    args.epochs = 500
+    args.batch_size = 8
+    args.image_size = 64
+    args.dataset_path = r"./data/cifar-10-batches-py"
+    args.device = "cuda"
+    args.lr = 3e-4
+    diffusion = Diffusion(img_size=args.image_size, device=args.device)
+    fid_value = fid_score.calculate_fid_given_paths([path_to_images, path_to_real_images], 50, args.device, 2048)
+    print(fid_value)
+
+def main():
+    #save_cifar_as_images()
+    # load_and_sample()
+    # calculate_fid('./sample_large', './real_data')
+    
     launch()
     
 if __name__ == '__main__':
