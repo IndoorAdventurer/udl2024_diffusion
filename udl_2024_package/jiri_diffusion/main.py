@@ -1,4 +1,3 @@
-
 import matplotlib
 matplotlib.use('Agg')  # Use a non-GUI backend
 import matplotlib.pyplot as plt
@@ -11,6 +10,9 @@ from PIL import Image
 from torch.nn import functional as F
 from pytorch_fid import fid_score
 
+#Diffusion and Unet based on: https://github.com/dome272/Diffusion-Models-pytorch
+
+# Diffusion class
 class Diffusion():
     def __init__(self, noise_steps=1000, beta_start=1e-4, beta_end=0.02, img_size=64, device='cuda'):
         self.noise_steps = noise_steps
@@ -23,19 +25,23 @@ class Diffusion():
         self.alpha = 1. - self.beta
         self.alpha_hat = torch.cumprod(self.alpha, dim=0)
     
+    # create the noise schedule
     def prepare_noise_schedule(self):
         betas = torch.linspace(self.beta_start, self.beta_end, self.noise_steps)
         return betas
 
+    # add noise to the image
     def add_noise(self, x, t):
         sqrt_alpha_hat = torch.sqrt(self.alpha_hat[t])[:, None, None, None]
         sqrt_one_minus_alpha_hat = torch.sqrt(1. - self.alpha_hat[t])[:, None, None, None]
         epsilon = torch.randn_like(x)
         return x * sqrt_alpha_hat + sqrt_one_minus_alpha_hat * epsilon, epsilon
 
+    # sample timesteps
     def sample_timesteps(self, n):
         return torch.randint(0, self.noise_steps, (n,))
 
+    # sample n images from the model
     def sample(self, model, n):
         model.eval()
         with torch.no_grad():
@@ -124,8 +130,6 @@ class Down(nn.Module):
         emb = emb[:x.shape[0], :, None, None].repeat(1, 1, x.shape[-2], x.shape[-1])
         return x + emb
 
-
-
 class Up(nn.Module):
     def __init__(self, in_channels, out_channels, emb_dim=256):
         super().__init__()
@@ -152,6 +156,7 @@ class Up(nn.Module):
         emb = emb[:, :, None, None].repeat(1, 1, x.shape[-2], x.shape[-1])
         return x + emb
 
+# Big UNet model
 class BigUnet(nn.Module):
     def __init__(self, c_in=3, c_out=3, time_dim=256, device="cuda"):
         super().__init__()
@@ -211,7 +216,8 @@ class BigUnet(nn.Module):
         x = self.sa6(x)
         output = self.outc(x)
         return output
-    
+
+# get CIFAR10 data 
 def get_data(args):
     transform = torchvision.transforms.Compose([
         torchvision.transforms.Resize(64),
@@ -224,30 +230,50 @@ def get_data(args):
 
     return dataloader
 
+# save images
 def save_images(images, path, **kwargs):
     grid = torchvision.utils.make_grid(images, **kwargs)
     ndarr = grid.permute(1,2,0).to('cpu').numpy()
     im = Image.fromarray(ndarr)
     im.save(path)
 
+# train the model
 def train(args):
+    # set device and get data
     device = args.device
     dataloader = get_data(args)
+
+    # initialize diffusion model
     model = BigUnet().to(device)
+
+    # initialize discriminator
     discriminator = Discriminator().to(device) 
+
+    # optimizer for diffusion
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
-    mse = torch.nn.MSELoss()
-    bce = torch.nn.BCELoss()
+
+    # optimizer for discriminator
     discriminator_optimizer = torch.optim.AdamW(discriminator.parameters(), lr=args.lr)
+
+    # loss for diffusion
+    mse = torch.nn.MSELoss()
+
+    # loss for discriminator
+    bce = torch.nn.BCELoss()
+
+    # initialize diffusion
     diffusion = Diffusion(img_size=args.image_size, device=device)
     l = len(dataloader)
 
+    # print the model
     print(model)
     print(sum(p.numel() for p in model.parameters()))
 
+    # initialize loss plots
     loss_plot = []
     loss_discriminator_plot = []
 
+    # train the model for the number of epochs
     for epoch in range(args.epochs):
         print(f"Epoch {epoch}")
         pbar = tqdm(dataloader)
@@ -257,29 +283,36 @@ def train(args):
             print("Training Discriminator")
             discriminator.train()
             for i, (images, _) in enumerate(pbar):
+                # noise the images
                 images = images.to(device)
                 t = diffusion.sample_timesteps(args.batch_size).to(device)
-
-                #this are the noised images
                 x_t, noise = diffusion.add_noise(images, t)
 
-                # this is the noised images with the noise removed; the "fake" data
+                # predict the noise with the diffusion model
                 predicted_noise = model(x_t, t)
 
                 #train discriminator
                 discriminator_optimizer.zero_grad()
+
+                #see if the discriminator can tell the difference between the real and predicted noise
                 real = discriminator(noise)
                 fake = discriminator(predicted_noise.detach())
+
+                # calculate the loss for the discriminator
                 loss_discriminator = bce(real, torch.ones_like(real)) + bce(fake, torch.zeros_like(fake))
+
                 loss_discriminator.backward()
                 discriminator_optimizer.step()
 
+            # append the loss to the loss plot
             loss_discriminator_plot.append(loss_discriminator.item())
         
         else:
+            # train the generator
             print("Training Generator")
             discriminator.eval()
             for i, (images, _) in enumerate(pbar):
+                # noise the images
                 images = images.to(device)
                 t = diffusion.sample_timesteps(images.shape[0]).to(device)
                 x_t, noise = diffusion.add_noise(images, t)
@@ -291,19 +324,22 @@ def train(args):
                 predicted_noise_det = predicted_noise.detach()
                 discriminator_result = discriminator(x_t - predicted_noise_det)
                 
+                # calculate the loss for the generator
                 loss_gen = mse(predicted_noise, noise)
+
+                # add the loss of the discriminator to the generator loss
                 loss_disc = 0.01 * bce(discriminator_result, torch.ones_like(discriminator_result))
-                
                 diffusion_loss = loss_gen + loss_disc
 
-                # Update generator (ensure discriminator does not modify needed tensors)
+                # Update generator
                 optimizer.zero_grad()
                 diffusion_loss.backward() 
                 optimizer.step()
 
+            # append the loss to the loss plot
             loss_plot.append(diffusion_loss.item())
 
-
+        # save the model, plot the loss and sample images
         sampled_images = diffusion.sample(model, n=images.shape[0])
         save_images(sampled_images, f'./sampled_images_{epoch}.png')
         torch.save(model.state_dict(), f'./diff_model_{epoch}.pt')
@@ -319,8 +355,8 @@ def train(args):
         plt.title('Loss discriminator')
         plt.savefig(f'./loss_discriminator_plot.png')
         plt.close()
-      
 
+# Discriminator model
 class Discriminator(nn.Module):
     def __init__(self, img_size=64):
         super().__init__()
@@ -335,12 +371,13 @@ class Discriminator(nn.Module):
     def forward(self, x):
         return torch.sigmoid(self.model(x).squeeze())  # Apply sigmoid
 
+# save images individually
 def save_images_individual(images, path, **kwargs):
     for i in range(images.shape[0]):
         im = Image.fromarray(images[i].permute(1, 2, 0).to('cpu').numpy())
         im.save(f"{path}_{i}.png")
         
-
+# launch the training
 def launch():
     import argparse
     parser = argparse.ArgumentParser()
@@ -354,6 +391,7 @@ def launch():
     args.lr = 3e-4
     train(args)
 
+# load the model and sample images
 def load_and_sample(epoch=150):
     import argparse
     parser = argparse.ArgumentParser()
@@ -371,6 +409,7 @@ def load_and_sample(epoch=150):
     sampled_images = diffusion.sample(model, n=50)
     save_images_individual(sampled_images, f'./sampled_large/sample_', format='png')
 
+# save CIFAR10 as images for FID calculation
 def save_cifar_as_images(n=100):
     transform = torchvision.transforms.Compose([
         torchvision.transforms.Resize(64),
@@ -387,6 +426,7 @@ def save_cifar_as_images(n=100):
         if i == 100:
             break
 
+# calculate the FID score
 def calculate_fid(path_to_images, path_to_real_images):
     import argparse
     parser = argparse.ArgumentParser()
@@ -401,12 +441,13 @@ def calculate_fid(path_to_images, path_to_real_images):
     fid_value = fid_score.calculate_fid_given_paths([path_to_images, path_to_real_images], 50, args.device, 2048)
     return fid_value
 
+# plot the FID over time
 def plot_FID_over_time():
 
     fid_values = []
     save_cifar_as_images()
 
-    for i in range(70):
+    for i in range(150):
         load_and_sample(i)
         val = calculate_fid(f'./sampled_large', './real_data')
         fid_values.append(val)
@@ -420,12 +461,11 @@ def plot_FID_over_time():
     plt.close()
 
 def main():  
+    launch()
+    save_cifar_as_images()
+    load_and_sample()
+    calculate_fid('./sample_large', './real_data')
     plot_FID_over_time()
-
-    # launch()
-    # save_cifar_as_images()
-    # load_and_sample()
-    # calculate_fid('./sample_large', './real_data')
     
 if __name__ == '__main__':
     main()
