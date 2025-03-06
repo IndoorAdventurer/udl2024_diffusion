@@ -1,18 +1,16 @@
 # Unsupervised Deep Learning Project Repo
+
 Project Repository for the 2024/2025 Unsupervised Deep Learning course at the University of Groningen
 
 ## Project overview
-TODO: work out. We want to basically train a diffusion model, but see if we can improve it by taking some inspiration from the GAN-based literature.
+For this university AI project, we implemented `DDPM` and `(W)GAN`, and looked at two different ways to combine them. Firstly, we investigated transfer learning properties when fine-tuning a `DDPM` `U-Net` as `GAN` generator. Next, we explored if a discriminator model could distinguish between the forward and backward diffusion process, and if incorporating this in the diffusion loss would still make the model converge -- and if it would lead to any qualitative or quantitative differences.
 
 ## Repository overview
 The file structure of this repo is as follows:
-- `udl_module/`: a Python package containing most of the code
-  - `nn/`: we can play around with different neural network architectures. All PyTorch `nn.Module` objects should go here.
-  - `jiri_diffusion/`: Jiri's experiments for training a baseline diffusion model.
-  - `vincent_diffusion/`: Vincent's experiments for training a baseline diffusion model.
-  - `jiri_gan/`: Jiri's experiments to introduce GAN-based loss into the diffusion model.
-  - `vincent_wgan/` Vincent's experiments to introduce Wasserstein-based GAN loss into the diffusion model.
-- `notebooks/`: The Jupyter Notebooks we write for training. These should import the `udl_module` code.
-
-## Some ideas to already write down
-We can see if a discriminator can discriminate between the diffusion process and the noising process. This means we should give any pair $`\mathbf{z}_t`$ and $`\mathbf{z}_{t+1}`$ as input to the discriminator. We can see if we can create a combined loss function, that is, for example, the average of the diffusion and the GAN loss, and otherwise switch back and forward or something. We will see how it goes 🤓
+- `experiment_1/`: this folder contains `Python` notebooks related to the first experiment, related to transfer learning.
+- `experiment_2`: this folder contains our implementation for the second experiment: combining `DDPM` and `GAN` loss.
+- `udl_module/`: a Python package containing much of the code used in experiment 1. It has subfolders:
+	- `nn/`: Our `PyTorch` `nn.Module` classes, such as a `U-Net` implementation.
+	- `diffusion/`: Backbone of the `DDPM` implementation.
+	- `wgan/`: Backbone of the Wasserstein GAN implementation.
+	- `datasets/`: Everything related to loading training/testing data for our models.
