@@ -170,7 +170,7 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
-notebooks/datasets/
+experiment_1/datasets/
 
 *.ckpt
 
